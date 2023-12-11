@@ -1,92 +1,246 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { motion } from "framer-motion";
+import { generate } from "random-words";
 
 export const Board = () => {
-  const [numRows, setNumRows] = useState(6);
-  const [numCells, setNumCells] = useState(5);
+  // const [numRows, setNumRows] = useState(6);
+  // const [numCells, setNumCells] = useState(5);
+  const numRows = 6;
+  const numCells = 5;
   const [focusedRow, setFocusedRow] = useState(0);
+  const [word, setWord] = useState<string[]>([]);
+  const [isGameOver, setIsGameOver] = useState(false);
 
   useEffect(() => {
-    console.log("focusedRow is ", focusedRow);
-  }, [focusedRow]);
+    const newWord = generate({ minLength: 5, maxLength: 5 });
+    console.log(newWord);
+    for (let i = 0; i < numCells; i++) {
+      setWord((prevWord) => [...prevWord, newWord[i]]);
+    }
+  }, []);
 
-  const word = ["h", "e", "l", "l", "o"];
+  console.log(word);
 
   const rows = [];
   for (let i = 0; i < numRows; i++) {
-    rows.push(<Row key={i} cellCount={numCells} rowNum={i} focusedRow={focusedRow} focusNextRow={setFocusedRow} word={word} />);
+    rows.push(
+      <Row
+        key={i}
+        cellCount={numCells}
+        rowNum={i}
+        focusedRow={focusedRow}
+        focusNextRow={setFocusedRow}
+        word={word}
+        game={{
+          isGameOver,
+          setIsGameOver,
+        }}
+      />
+    );
   }
 
   return (
     <div className="flex flex-col gap-10">
-      <div className="flex flex-col justify-center items-center gap-[5px]">{rows}</div>
+      <div className="flex flex-col justify-center items-center gap-[5px]">
+        {rows}
+      </div>
     </div>
   );
 };
 
-const Row = (props: { cellCount: number; rowNum: number; focusedRow: number; focusNextRow: React.Dispatch<React.SetStateAction<number>>; word: string[] }) => {
-  const { cellCount = 5, rowNum, focusedRow, focusNextRow, word } = props;
-  const [guess, setGuess] = useState<string[]>([]);
-  const cells = [];
-  for (let i = 0; i < cellCount; i++) {
-    cells.push(<Cell key={i} letter={guess[i]} validity="" />);
-  }
+interface LetterCount {
+  [key: string]: number;
+}
 
-  useEffect(() => {
-    // console.log("guess is ", guess);
-  }, [guess]);
+const Row = (props: {
+  cellCount: number;
+  rowNum: number;
+  focusedRow: number;
+  focusNextRow: React.Dispatch<React.SetStateAction<number>>;
+  word: string[];
+  game: {
+    isGameOver: boolean;
+    setIsGameOver: React.Dispatch<React.SetStateAction<boolean>>;
+  };
+}) => {
+  const { cellCount = 5, rowNum, focusedRow, focusNextRow, word, game } = props;
+  // console.log("word is ", word);
+  const [guess, setGuess] = useState<string[]>(new Array(cellCount).fill(""));
+  const [validities, setValidities] = useState<
+    ("present" | "correct" | "absent" | null)[]
+  >(new Array(cellCount).fill(""));
+  const [animateScaleIndex, setAnimateScaleIndex] = useState<number | null>(
+    null
+  );
+  const [animateFlip, setAnimateFlip] = useState(false);
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (rowNum === focusedRow) {
-        // console.log(`event.key: ${event.key}, focusedRow: ${focusedRow}, rowNum: ${rowNum}, guess: (${guess.join(", ")}), guess.length: ${guess.length}, cellCount: ${cellCount}`);
-        if (/^[a-zA-Z]$/.test(event.key)) {
-          if (guess.length < cellCount) {
-            setGuess((prevGuess) => [...prevGuess, event.key]);
-          }
-        } else if (event.key === "Backspace") {
-          if (guess.length > 0) {
-            setGuess((prevGuess) => prevGuess.slice(0, prevGuess.length - 1));
-          }
-        } else if (event.key === "Enter" && guess.length === cellCount) {
-          focusNextRow((prevRowNum) => prevRowNum + 1);
-          for (let i = 0; i < 5; i++) {
-            if (guess[i] !== word[i]) {
-              console.log(guess[i], word[i], "incorrect");
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent) => {
+      if (game.isGameOver || rowNum !== focusedRow) return;
+
+      const newGuess = [...guess];
+      if (
+        /^[a-zA-Z]$/.test(event.key) &&
+        newGuess.join("").length < cellCount
+      ) {
+        const index = newGuess.join("").length;
+        newGuess[index] = event.key;
+        setGuess(newGuess);
+        // Trigger scale animation
+        setAnimateScaleIndex(index);
+      } else if (event.key === "Backspace") {
+        const index = Math.max(newGuess.join("").length - 1, 0);
+        newGuess[index] = "";
+        setGuess(newGuess);
+        // Reset scale animation
+        setAnimateScaleIndex(null);
+      } else if (
+        event.key === "Enter" &&
+        newGuess.join("").length === cellCount
+      ) {
+        // Count each letter's occurrence in the target word
+        const wordLetterCount = word.reduce((acc: LetterCount, letter) => {
+          acc[letter] = (acc[letter] || 0) + 1;
+          return acc;
+        }, {} as LetterCount);
+
+        // First pass: Mark 'correct' letters and reduce count
+        const newValidities: ("present" | "correct" | "absent" | null)[] =
+          newGuess.map((g, i) => {
+            if (g === word[i]) {
+              wordLetterCount[g]--; // Decrement the count of the correctly guessed letter
+              return "correct";
+            }
+            return null; // Placeholder for letters not yet determined
+          });
+
+        // Second pass: Mark 'present' and 'absent' letters
+        newValidities.forEach((val, i) => {
+          if (val === null) {
+            if (
+              word.includes(newGuess[i]) &&
+              wordLetterCount[newGuess[i]] > 0
+            ) {
+              wordLetterCount[newGuess[i]]--;
+              newValidities[i] = "present";
+            } else {
+              newValidities[i] = "absent";
             }
           }
+        });
+
+        setValidities(newValidities);
+
+        // Trigger flip animation
+        setAnimateFlip(true);
+
+        if (focusedRow !== 5) {
+          console.log("focusedRow is ", focusedRow);
+          focusNextRow((prev) => prev + 1);
+        } else {
+          // alert("You lose!");
+          game.setIsGameOver(true);
         }
-      } else {
-        // console.log(`not focused ${rowNum}`);
       }
-    };
-    window.addEventListener("keydown", handleKeyDown);
+    },
+    [cellCount, focusNextRow, focusedRow, game, guess, rowNum, word]
+  );
 
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [cellCount, focusNextRow, focusedRow, guess, rowNum, word]);
-
-  return <div className={`flex justify-center items-center gap-[5px] ${rowNum === focusedRow ? "bg-green-300" : "bg-red-300"}`}>{cells}</div>;
-};
-
-const Cell = (props: { letter: string; validity: "wrong-letter" | "wrong-place" | "right-place" | "" }) => {
-  const { letter, validity } = props;
-  const [validityStyle, setValidityStyle] = useState("bg-transparent border-[#3A3A3C] border-2");
   useEffect(() => {
-    switch (validity) {
-      case "wrong-letter":
-        setValidityStyle("bg-[#3A3A3C]");
-        break;
-      case "wrong-place":
-        setValidityStyle("bg-[#B59F3B]");
-        break;
-      case "right-place":
-        setValidityStyle("bg-[#538D4E]");
-        break;
-      default:
-        setValidityStyle("bg-transparent border-[#3A3A3C] border-2");
-    }
-  }, [validity]);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    cellCount,
+    focusedRow,
+    guess,
+    rowNum,
+    word,
+    focusNextRow,
+    validities,
+    handleKeyDown,
+  ]);
 
-  return <div className={`${validityStyle}  w-16 h-16 text-zinc-100 text-center text-4xl font-bold capitalize flex justify-center items-center focus:border-[#565758]`}>{letter}</div>;
+  useEffect(() => {
+    // console.log("validities are ", validities);
+    if (validities.every((v) => v === "correct")) {
+      console.log("You win!");
+      game.setIsGameOver(true);
+    }
+  }, [game, handleKeyDown, validities]);
+
+  return (
+    <div className="flex justify-center items-center gap-[5px]">
+      {guess.map((letter, i) => (
+        <Cell
+          key={i}
+          letter={letter}
+          animateScale={animateScaleIndex === i}
+          animateFlip={animateFlip}
+          validity={validities[i]}
+          delay={(i + 1) * 0.1}
+        />
+      ))}
+    </div>
+  );
 };
+
+const Cell = (props: {
+  letter: string;
+  animateScale: boolean;
+  animateFlip: boolean;
+  validity: "present" | "correct" | "absent" | null;
+  delay: number;
+}) => {
+  const { letter, animateScale, animateFlip, validity, delay } = props;
+  let animation = {};
+  if (animateFlip) {
+    animation = {
+      rotateX: 180,
+      backgroundColor: getValidityColor(validity),
+      borderColor: getValidityColor(validity),
+      transition: { delay, duration: 0.7 },
+    };
+  } else if (animateScale) {
+    animation = {
+      scale: [1, 1.2, 1],
+      transition: { duration: 0.4 },
+    };
+  }
+
+  // The letter cell flips 180 in the real wordle,
+  // but this leaves the letter upside down, so
+  // flip the letter 180 degrees in the opposite
+  // direction to correct it.
+  const letterFlipAnimation = {
+    rotateX: -180,
+    transition: { delay, duration: 0.5 },
+  };
+
+  return (
+    <motion.div
+      className="w-16 h-16 text-zinc-100 text-center text-4xl font-bold capitalize flex justify-center items-center border-2 border-[#3A3A3C]"
+      animate={animation}
+    >
+      {animateFlip ? (
+        <motion.div animate={letterFlipAnimation}>{letter}</motion.div>
+      ) : (
+        letter
+      )}
+    </motion.div>
+  );
+};
+
+function getValidityColor(
+  validity: "present" | "correct" | "absent" | null
+): string {
+  switch (validity) {
+    case "correct":
+      return "#538D4E";
+    case "present":
+      return "#B59F3B";
+    case "absent":
+      return "#3A3A3C";
+    default:
+      return "#121213";
+  }
+}
